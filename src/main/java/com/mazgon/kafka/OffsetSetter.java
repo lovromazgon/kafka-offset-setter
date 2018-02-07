@@ -4,11 +4,14 @@ import org.apache.commons.cli.*;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
+import ch.qos.logback.classic.Level;
 
 /**
  * Command line tool for setting the current offset in internal Kafka topic '__consumer_offsets'
@@ -16,14 +19,20 @@ import java.util.*;
  * Created by lovro on 30.1.2017.
  */
 public class OffsetSetter {
-    private static final String KAFKA_CONFIG_LONGOPT = "config";
-    private static final String KAFKA_TOPIC_LONGOPT = "topic";
-    private static final String KAFKA_PARTITION_LONGOPT = "partition";
-    private static final String KAFKA_OFFSET_LONGOPT = "offset";
+    private static final String CONFIG_LONGOPT    = "config";
+    private static final String TOPIC_LONGOPT     = "topic";
+    private static final String PARTITION_LONGOPT = "partition";
+    private static final String OFFSET_LONGOPT    = "offset";
+    private static final String INLINE_CONFIG_LONGOPT    = "inline-config";
 
-    private static final String DEFAULT_KAFKA_CONFIG = "kafka.properties";
+    private static final String DEFAULT_CONFIG = "kafka.properties";
+
+    private static final Logger log = LoggerFactory.getLogger(OffsetSetter.class);
 
     public static void main(String[] args) {
+        ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
+        root.setLevel(Level.INFO);
+
         OffsetSetterConfig config = null;
 
         try {
@@ -33,24 +42,37 @@ public class OffsetSetter {
             System.exit(1);
         }
 
-        Map<TopicPartition, OffsetAndMetadata> m = new HashMap<>();
-        m.put(new TopicPartition(config.kafkaTopic, config.kafkaPartition), new OffsetAndMetadata(config.kafkaOffset));
+        String groupId = config.properties.getProperty("group.id");
 
-        System.out.println("Creating Kafka consumer ...");
-        KafkaConsumer<String, String> kc = new org.apache.kafka.clients.consumer.KafkaConsumer<>(config.kafkaProperties);
-        System.out.println("Committing offset " + config.kafkaOffset + " to topic " + config.kafkaTopic + ", partition " + config.kafkaPartition + " ...");
-        kc.commitSync(m);
-        System.out.println("Closing Kafka consumer ...");
+        log.info("Creating Kafka consumer ...");
+        KafkaConsumer<String, String> kc = new KafkaConsumer<>(config.properties);
+        log.info("---");
+        if (config.offset < 0) {
+            // select existing offset
+            TopicPartition tp = new TopicPartition(config.topic, config.partition);
+            kc.assign(Collections.singletonList(tp));
+            log.info("Next offset for group {}, topic {}, partition {}: {}", groupId, config.topic, config.partition, kc.position(tp));
+        } else {
+            // set offset
+            Map<TopicPartition, OffsetAndMetadata> m = new HashMap<>();
+            m.put(new TopicPartition(config.topic, config.partition), new OffsetAndMetadata(config.offset));
+
+            log.info("Committing offset {} to group {}, topic {}, partition {} ...", groupId, config.offset, config.topic, config.partition);
+            kc.commitSync(m);
+        }
+        log.info("---");
+        log.info("Closing Kafka consumer ...");
         kc.close();
-        System.out.println("Done!");
+        log.info("Done!");
     }
 
     private static Options createCliOptions() {
         Options opts = new Options();
-        opts.addOption("c", KAFKA_CONFIG_LONGOPT, true, "Path to the properties file for the Kafka consumer");
-        opts.addOption("t", KAFKA_TOPIC_LONGOPT, true, "The topic for which to set the offset");
-        opts.addOption("p", KAFKA_PARTITION_LONGOPT, true, "The partition for which to set the offset");
-        opts.addOption("o", KAFKA_OFFSET_LONGOPT, true, "The custom offset, which will be set as the last offset consumed");
+        opts.addOption("c", CONFIG_LONGOPT, true, "Path to the properties file for the Kafka consumer");
+        opts.addOption("t", TOPIC_LONGOPT, true, "The topic for which to set the offset");
+        opts.addOption("p", PARTITION_LONGOPT, true, "The partition for which to set the offset");
+        opts.addOption("o", OFFSET_LONGOPT, true, "The custom offset, which will be set as the last offset consumed");
+        opts.addOption("i", INLINE_CONFIG_LONGOPT, true, "A property from the properties file for the Kafka consumer (takes precedence in case the properties file contains the same property)");
         return opts;
     }
 
@@ -60,38 +82,58 @@ public class OffsetSetter {
         Options options = createCliOptions();
 
         CommandLine cli = new DefaultParser().parse(options, args, true);
-        config.kafkaTopic = cli.getOptionValue(KAFKA_TOPIC_LONGOPT);
-        String strKafkaPartition = cli.getOptionValue(KAFKA_PARTITION_LONGOPT);
-        String strKafkaOffset = cli.getOptionValue(KAFKA_OFFSET_LONGOPT);
+        config.topic = cli.getOptionValue(TOPIC_LONGOPT);
+        String strKafkaPartition = cli.getOptionValue(PARTITION_LONGOPT);
+        String strKafkaOffset = cli.getOptionValue(OFFSET_LONGOPT);
 
-        if (config.kafkaTopic == null) throw new ParseException("Missing argument '" + KAFKA_TOPIC_LONGOPT + "'");
-        if (strKafkaPartition == null) throw new ParseException("Missing argument '" + KAFKA_PARTITION_LONGOPT + "'");
-        if (strKafkaOffset == null) throw new ParseException("Missing argument '" + KAFKA_OFFSET_LONGOPT + "'");
+        if (config.topic == null) throw new ParseException("Missing argument '" + TOPIC_LONGOPT + "'");
+        if (strKafkaPartition == null) throw new ParseException("Missing argument '" + PARTITION_LONGOPT + "'");
 
-        try { config.kafkaPartition = Integer.parseInt(strKafkaPartition); } catch (NumberFormatException e) {
-            throw new ParseException("Could not parse argument -" + KAFKA_PARTITION_LONGOPT + "='" + strKafkaPartition + "' because: " + e.getMessage());
+        try { config.partition = Integer.parseInt(strKafkaPartition); } catch (NumberFormatException e) {
+            throw new ParseException("Could not parse argument -" + PARTITION_LONGOPT + "='" + strKafkaPartition + "' because: " + e.getMessage());
         }
-        try { config.kafkaOffset = Integer.parseInt(strKafkaOffset); } catch (NumberFormatException e) {
-            throw new ParseException("Could not parse argument -" + KAFKA_OFFSET_LONGOPT + "='" + strKafkaPartition + "' because: " + e.getMessage());
+        if (strKafkaOffset != null) {
+            try { config.offset = Integer.parseInt(strKafkaOffset); } catch (NumberFormatException e) {
+                throw new ParseException("Could not parse argument -" + OFFSET_LONGOPT + "='" + strKafkaPartition + "' because: " + e.getMessage());
+            }
+            if (config.offset < 0) {
+                throw new ParseException("Argument " + OFFSET_LONGOPT + " accepts only non-negative values");
+            }
+        } else {
+            config.offset = -1;
         }
 
-        String tempKafkaPropertiesPath = cli.getOptionValue(KAFKA_CONFIG_LONGOPT, DEFAULT_KAFKA_CONFIG);
-        config.kafkaProperties = new Properties();
+        boolean propertiesPathSupplied = cli.getOptionValue(CONFIG_LONGOPT) != null;
+        String kafkaPropertiesPath = cli.getOptionValue(CONFIG_LONGOPT, DEFAULT_CONFIG);
+        config.properties = new Properties();
 
-        try (InputStream input = new FileInputStream(tempKafkaPropertiesPath)) {
+        try (InputStream input = new FileInputStream(kafkaPropertiesPath)) {
             // load a properties file
-            config.kafkaProperties.load(input);
+            config.properties.load(input);
         } catch (IOException ex) {
-            throw new ParseException("Could not parse properties file '" + tempKafkaPropertiesPath + "' because: " + ex.getMessage());
+            // throw error only if the option was really supplied
+            if (propertiesPathSupplied) {
+                throw new ParseException("Could not parse properties file '" + kafkaPropertiesPath + "' because: " + ex.getMessage());
+            } else {
+                log.warn("Didn't find default properties file: {}", DEFAULT_CONFIG);
+            }
+        }
+
+        String[] inlineConfig = cli.getOptionValues(INLINE_CONFIG_LONGOPT);
+        if (inlineConfig != null) {
+            for (String opt : inlineConfig) {
+                String[] tokens = opt.split("=");
+                config.properties.setProperty(tokens[0], tokens[1]);
+            }
         }
 
         return config;
     }
 
     private static class OffsetSetterConfig {
-        public Properties kafkaProperties;
-        public String kafkaTopic;
-        public int kafkaPartition;
-        public int kafkaOffset;
+        public Properties properties;
+        public String topic;
+        public int partition;
+        public int offset;
     }
 }
