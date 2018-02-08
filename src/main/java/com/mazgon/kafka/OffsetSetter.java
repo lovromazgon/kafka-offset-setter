@@ -1,7 +1,9 @@
 package com.mazgon.kafka;
 
 import org.apache.commons.cli.*;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.NoOffsetForPartitionException;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
@@ -43,15 +45,22 @@ public class OffsetSetter {
         }
 
         String groupId = config.properties.getProperty("group.id");
-
-        log.info("Creating Kafka consumer ...");
         KafkaConsumer<String, String> kc = new KafkaConsumer<>(config.properties);
+
         log.info("---");
         if (config.offset < 0) {
             // select existing offset
             TopicPartition tp = new TopicPartition(config.topic, config.partition);
             kc.assign(Collections.singletonList(tp));
-            log.info("Next offset for group {}, topic {}, partition {}: {}", groupId, config.topic, config.partition, kc.position(tp));
+
+            String position;
+            try {
+                position = Long.toString(kc.position(tp));
+            } catch(NoOffsetForPartitionException e) {
+                position = "empty";
+            }
+
+            log.info("Next offset for group {}, topic {}, partition {}: {}", groupId, config.topic, config.partition, position);
         } else {
             // set offset
             Map<TopicPartition, OffsetAndMetadata> m = new HashMap<>();
@@ -61,7 +70,6 @@ public class OffsetSetter {
             kc.commitSync(m);
         }
         log.info("---");
-        log.info("Closing Kafka consumer ...");
         kc.close();
         log.info("Done!");
     }
@@ -103,9 +111,12 @@ public class OffsetSetter {
             config.offset = -1;
         }
 
+        config.properties = new Properties();
+        // very important - when only checking an offset we don't want to reset the offset to the latest
+        config.properties.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+
         boolean propertiesPathSupplied = cli.getOptionValue(CONFIG_LONGOPT) != null;
         String kafkaPropertiesPath = cli.getOptionValue(CONFIG_LONGOPT, DEFAULT_CONFIG);
-        config.properties = new Properties();
 
         try (InputStream input = new FileInputStream(kafkaPropertiesPath)) {
             // load a properties file
