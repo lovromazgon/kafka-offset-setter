@@ -48,7 +48,7 @@ public class OffsetSetter {
         KafkaConsumer<String, String> kc = new KafkaConsumer<>(config.properties);
 
         log.info("---");
-        if (config.offset < 0) {
+        if (config.offset == null) {
             // select existing offset
             TopicPartition tp = new TopicPartition(config.topic, config.partition);
             kc.assign(Collections.singletonList(tp));
@@ -104,11 +104,6 @@ public class OffsetSetter {
             try { config.offset = Integer.parseInt(strKafkaOffset); } catch (NumberFormatException e) {
                 throw new ParseException("Could not parse argument -" + OFFSET_LONGOPT + "='" + strKafkaPartition + "' because: " + e.getMessage());
             }
-            if (config.offset < 0) {
-                throw new ParseException("Argument " + OFFSET_LONGOPT + " accepts only non-negative values");
-            }
-        } else {
-            config.offset = -1;
         }
 
         config.properties = new Properties();
@@ -145,6 +140,6 @@ public class OffsetSetter {
         public Properties properties;
         public String topic;
         public int partition;
-        public int offset;
+        public Integer offset;
     }
 }
