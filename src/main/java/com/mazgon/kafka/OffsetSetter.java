@@ -66,7 +66,7 @@ public class OffsetSetter {
             Map<TopicPartition, OffsetAndMetadata> m = new HashMap<>();
             m.put(new TopicPartition(config.topic, config.partition), new OffsetAndMetadata(config.offset));
 
-            log.info("Committing offset {} to group {}, topic {}, partition {} ...", groupId, config.offset, config.topic, config.partition);
+            log.info("Committing offset {} to group {}, topic {}, partition {} ...", config.offset, groupId, config.topic, config.partition);
             kc.commitSync(m);
         }
         log.info("---");
